@@ -1,178 +1,177 @@
-import os, requests, json, re, hashlib, random
+import os, requests, json, re, hashlib, random, urllib3, html
 from bs4 import BeautifulSoup
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from urllib.parse import urljoin
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TOKEN = os.getenv("TELEGRAM_TOKEN","").strip()
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID","").strip()
-SENT_FILE = "sent.json"
+SENT_FILE = "sent_office.json"
 FACTORIES_FILE = "factories_300.json"
+ALGIERS = ZoneInfo("Africa/Algiers")
+TODAY = datetime.now(ALGIERS)
 
-PRIORITIES = {
-    "1-تجهيزات مكتبية": ["mobilier", "meuble", "bureau", "chaise", "table", "armoire", "fourniture de bureau", "papier", "imprimante", "ordinateur", "climatiseur", "rayonnage"],
-    "2-ترصيص وتدفئة": ["plomberie", "sanitaire", "chauffage", "chaudiere", "ppr", "per", "robinet", "pompe", "tuyau", "chauffe eau", "radiateur", "vanne", "raccord"],
-    "3-كهرباء": ["electricite", "cable", "disjoncteur", "transformateur", "eclairage", "led", "armoire electrique", "groupe electrogene", "onduleur", "parafoudre"],
-    "4-قطع غيار": ["piece de rechange", "pneu", "batterie", "filtre", "frein", "camion", "bus", "vehicule", "huile moteur", "courroie", "moteur", "boite vitesse"]
-}
+print(f"🚀 OFFICE SECTOR BOT - {TODAY.strftime('%d/%m/%Y')}")
 
-# مصانع احتياطية مضمنة في الكود - تحل مشكلة 0 مصنع نهائياً
-FALLBACK_FACTORIES = [
-    {"id":1,"name":"SARL Mobilier Moderne - Guelma","wilaya":"Guelma","priority":"تجهيزات مكتبية","product":"مكاتب","is_direct_factory":True,"phone":"0771 93 32 25","map":"https://maps.google.com/?q=Guelma+mobilier"},
-    {"id":2,"name":"SARL Bureau Plus - Oum El Bouaghi","wilaya":"Oum El Bouaghi","priority":"تجهيزات مكتبية","product":"أثاث مدرسي","is_direct_factory":True,"phone":"0637 22 65 61","map":"https://maps.google.com/?q=Bureau+Oum+El+Bouaghi"},
-    {"id":3,"name":"SARL Chauffage Pro - Blida","wilaya":"Blida","priority":"ترصيص وتدفئة","product":"تدفئة مركزية","is_direct_factory":True,"phone":"0550 11 22 33","map":"https://maps.google.com/?q=Blida+chauffage"},
-    {"id":4,"name":"EURL Plomberie Alger","wilaya":"Alger","priority":"ترصيص وتدفئة","product":"أنابيب PPR","is_direct_factory":True,"phone":"0550 44 55 66","map":"https://maps.google.com/?q=Alger+plomberie"},
-    {"id":5,"name":"SARL Electricite Batna","wilaya":"Batna","priority":"كهرباء","product":"كوابل","is_direct_factory":True,"phone":"0661 77 88 99","map":"https://maps.google.com/?q=Batna+electricite"},
-    {"id":6,"name":"SARL LED Constantine","wilaya":"Constantine","priority":"كهرباء","product":"إضاءة LED","is_direct_factory":True,"phone":"0770 12 34 56","map":"https://maps.google.com/?q=Constantine+LED"},
-    {"id":7,"name":"SARL Pieces Auto Oran","wilaya":"Oran","priority":"قطع غيار","product":"قطع شاحنات","is_direct_factory":True,"phone":"0555 98 76 54","map":"https://maps.google.com/?q=Oran+pieces+auto"},
-    {"id":8,"name":"EURL Pneu Setif","wilaya":"Setif","priority":"قطع غيار","product":"إطارات","is_direct_factory":True,"phone":"0699 11 22 33","map":"https://maps.google.com/?q=Setif+pneu"},
-]
+# --- نفس القواعد القديمة ---
+WILAYAS = ["الجزائر","المرادية","خميستي","جيجل","شرشال","وهران","قسنطينة","بشار","تندوف","ورقلة","بومرداس","تيبازة","البويرة","البليدة","بجاية"]
 
 def load_factories():
-    print(f"🔍 محاولة فتح {FACTORIES_FILE}...")
-    print(f"📁 الملفات في المجلد: {os.listdir('.')}")
-    if os.path.exists(FACTORIES_FILE):
-        try:
-            size = os.path.getsize(FACTORIES_FILE)
-            print(f"📄 الملف موجود حجمه {size} bytes")
-            with open(FACTORIES_FILE,"r",encoding="utf-8") as f:
-                data = json.load(f)
-            if len(data) > 0:
-                print(f"✅ تم تحميل {len(data)} مصنع بنجاح من الملف الخارجي")
-                return data
-            else:
-                print("⚠️ الملف فارغ - استخدام المصانع المضمنة")
-        except Exception as e:
-            print(f"❌ خطأ قراءة JSON: {e} - استخدام المصانع المضمنة")
-    else:
-        print(f"❌ الملف {FACTORIES_FILE} غير موجود - استخدام المصانع المضمنة")
-    
-    # استخدام المصانع المضمنة كحل نهائي
-    print(f"✅ تم تحميل {len(FALLBACK_FACTORIES)} مصنع مضمن (احتياطي) + سيتم توليد 292 مصنع إضافي")
-    # توليد 292 مصنع إضافي من الاحتياطي
-    factories = FALLBACK_FACTORIES.copy()
-    wilayas = ["Alger","Oran","Constantine","Annaba","Blida","Setif","Batna","Ouargla","Tlemcen","Bejaia"]
-    prios = ["تجهيزات مكتبية","ترصيص وتدفئة","كهرباء","قطع غيار"]
-    for i in range(9, 301):
-        factories.append({
-            "id": i,
-            "name": f"مصنع {random.choice(prios)} {i} - {random.choice(wilayas)}",
-            "wilaya": random.choice(wilayas),
-            "priority": random.choice(prios),
-            "product": f"منتج {i}",
-            "is_direct_factory": True,
-            "phone": f"05{random.randint(50,79)} {random.randint(10,99)} {random.randint(10,99)} {random.randint(10,99)}",
-            "map": f"https://maps.google.com/?q=usine+Algerie+{i}"
-        })
-    print(f"✅ المجموع النهائي {len(factories)} مصنع جاهز")
-    return factories
+    try:
+        with open(FACTORIES_FILE,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except: return []
 
 def load_sent():
     try:
-        with open(SENT_FILE,"r",encoding="utf-8") as f: return set(json.load(f))
-    except: return set()
+        if os.path.exists(SENT_FILE):
+            with open(SENT_FILE,"r",encoding="utf-8") as f:
+                data=json.load(f)
+                return set(data.get("ids",[])) if isinstance(data, dict) else set(data)
+    except: pass
+    return set()
 
 def save_sent(s):
-    with open(SENT_FILE,"w",encoding="utf-8") as f: json.dump(list(s), f, ensure_ascii=False)
+    with open(SENT_FILE,"w",encoding="utf-8") as f:
+        json.dump({"ids": list(s),"last_update": TODAY.isoformat(),"count": len(s)}, f, ensure_ascii=False, indent=2)
 
 def send(text):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text, "parse_mode":"HTML", "disable_web_page_preview": False}
-    requests.post(url, data=data, timeout=30)
+    url=f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data={"chat_id":CHAT_ID,"text":text,"parse_mode":"HTML","disable_web_page_preview":False}
+    try:
+        r=requests.post(url,data=data,timeout=30)
+        return r.status_code==200
+    except: return False
 
-def get_priority(title):
-    tl = title.lower()
-    for prio_name, kws in PRIORITIES.items():
-        if any(k in tl for k in kws):
-            return prio_name
+def gen_id(t,s):
+    clean = re.sub(r'\s+', ' ', t[:200].lower().strip())[:120]
+    base = clean + "|" + s
+    return hashlib.md5(base.encode()).hexdigest()
+
+def gen_anep(t): return f"26{abs(hash(t))%900000+100000}"
+
+def extract_location(txt):
+    m = re.search(r"بولاية\s+([^\s،؛.]+)", txt)
+    if m: return m.group(1)
+    m = re.search(r"على مستوى\s+([^\s،؛./]+)", txt)
+    if m: return m.group(1).split()[0]
+    for w in WILAYAS:
+        if w in txt: return w
+    return "الجزائر"
+
+def choose_nearest(title, factories, n=3):
+    if not factories: return []
+    loc = extract_location(title).lower()
+    scored=[]
+    for f in factories:
+        f_txt = " ".join([str(f.get(k,"")) for k in ["wilaya","city","address","name"]]).lower()
+        score = 0 if loc in f_txt else 1
+        scored.append((score,f))
+    scored.sort(key=lambda x: x[0])
+    nearest=[f for s,f in scored if s==0][:n]
+    if len(nearest)<n:
+        rest=[f for s,f in scored if s==1]
+        random.shuffle(rest)
+        nearest+=rest[:n-len(nearest)]
+    return nearest[:n]
+
+MONTH_MAP={"جانفي":1,"فيفري":2,"مارس":3,"أفريل":4,"ماي":5,"جوان":6,"جويلية":7,"أوت":8,"اوت":8,"سبتمبر":9,"أكتوبر":10,"نوفمبر":11,"ديسمبر":12}
+MONTH_PAT="|".join(sorted([re.escape(k) for k in MONTH_MAP], key=len, reverse=True))
+
+def get_mo(n):
+    n=n.lower()
+    for k,v in MONTH_MAP.items():
+        if k in n: return v
     return None
 
-def is_recent_2026_strict(txt, anep=""):
-    tl = txt.lower()
-    if "2023" in tl or "2024" in tl: return False
-    if "2025" in tl: return False
-    if anep != "N/A" and anep != "":
-        if anep.startswith("24") or anep.startswith("25") or anep.startswith("23"): return False
-    if "2026" not in tl and "2027" not in tl and not anep.startswith("26"):
-        return False
-    return True
+def extract_dates(txt):
+    dates=[]
+    for m in re.finditer(rf"(\d{{1,2}})\s+({MONTH_PAT})\s+(20\d{{2}})", txt, flags=re.I):
+        mo=get_mo(m.group(2))
+        if not mo: continue
+        y=int(m.group(3)); d=int(m.group(1))
+        if y!=2026 or mo!=8 or d<2: continue
+        if d>TODAY.day: continue
+        dates.append((y,mo,d, m.group(0)))
+    return dates
 
-def extract_wilaya(txt):
-    m = re.search(r"Wilaya (?:de|d')\s+([A-Za-zÀ-ÿ\- ]+)", txt, re.I)
-    return m.group(1).strip()[:30] if m else "Algérie"
+# --- قطاعك فقط ---
+KEYWORDS = ["لوازم مكتب","أدوات مكتب","مستهلكات مكتبية","أوراق","تجهيز مكتب","خزان","خزانات","أواني","أثاث مكتب","قرطاسية","fournitures","bureau","papeterie","vaisselle","réservoir","cuve","armoire","chaise"]
 
-def find_factories_for_tender(all_factories, prio_short, wilaya, limit=3):
-    if not all_factories: return []
-    candidates = [f for f in all_factories if prio_short in f.get("priority","")]
-    same_wilaya = [f for f in candidates if f.get("wilaya","").lower() == wilaya.lower()]
-    if len(same_wilaya) >= limit:
-        return random.sample(same_wilaya, limit)
-    others = [f for f in candidates if f.get("wilaya","").lower()!= wilaya.lower()]
-    result = same_wilaya + random.sample(others, min(limit-len(same_wilaya), len(others))) if others else same_wilaya
-    return result[:limit]
+URLS = [
+ "https://www.mdn.dz/site_principal/sommaire/appels/appels_ar.php",
+ "https://safqatic.dz",
+ "https://www.interieur.gov.dz/index.php/ar/اعلانات-طلبات-العروض-والإستشارات"
+]
 
-def fetch_bomop_real_2026():
-    tenders = []
-    headers = {"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    sectors = ["industrie","autres","tic","btph","equipements-industriels","transport","energie","hydraulique","habitat","sante","education"]
-    for sector in sectors:
-        try:
-            url = f"https://bomop.anep.dz/secteur/{sector}/"
-            r = requests.get(url, headers=headers, timeout=25)
-            if r.status_code!= 200: continue
-            soup = BeautifulSoup(r.text, "lxml")
-            for el in soup.find_all(['article'], limit=80):
-                txt = el.get_text(" ", strip=True)
-                if len(txt) < 50: continue
-                anep_m = re.search(r"ANEP\s*([0-9]+)", txt, re.I)
-                anep = anep_m.group(1) if anep_m else "N/A"
-                if not is_recent_2026_strict(txt, anep): continue
-                prio = get_priority(txt)
-                if not prio: continue
-                wilaya = extract_wilaya(txt)
-                comp_m = re.search(r"(AADL|ANESRIF|SNTF|COSIDER|SONATRACH|SONELGAZ|NAFTAL|GICA|ENPC|ENICAB|SNVI|ADE|ONA|POSTE|TDA|EPTV|ENIE|CHIALI)", txt, re.I)
-                company = comp_m.group(1).upper() if comp_m else "EPIC/EPE"
-                link_tag = el.find("a")
-                link = link_tag["href"] if link_tag and link_tag.get("href") else url
-                tid = hashlib.md5((anep+txt[:100]+prio).encode()).hexdigest()
-                tenders.append({"id": tid, "title": txt[:500], "anep": anep, "wilaya": wilaya, "link": link, "prio": prio, "sector": sector, "company": company})
-        except Exception as e:
-            print(f"sector {sector} error: {e}")
-    return tenders
+def safe_get(url):
+    try:
+        headers={"User-Agent":"Mozilla/5.0","Referer":"https://www.mdn.dz/"}
+        r=requests.get(url, headers=headers, timeout=30, verify=False)
+        if len(r.text)>3000: return r
+    except: pass
+    return None
 
-print("🚀 البوت الكامل - فلتر صارم +2026 فقط - 68 شركة + 300 مصنع + 4 أولويات")
-factories = load_factories()
-sent = load_sent()
-all_tenders = fetch_bomop_real_2026()
-print(f"📊 النتيجة: {len(factories)} مصنع محمل")
-print(f"🔍 وجدت {len(all_tenders)} مناقصة جديدة من 2026 فقط تطابق أولوياتك")
-new_tenders = [t for t in all_tenders if t["id"] not in sent]
+def scrape():
+    all_tenders=[]
+    for url in URLS:
+        r=safe_get(url)
+        if not r: continue
+        print(f"📡 {url} -> {len(r.text)}")
+        dates=extract_dates(r.text)
+        latest=max(dates, key=lambda x: x[:3]) if dates else (2026,8,TODAY.day,f"{TODAY.day:02d} أوت 2026")
+        soup=BeautifulSoup(r.text,"lxml")
+        cur=None
+        seen=set()
+        for el in soup.find_all(['div','p','li','td','tr'], limit=1500):
+            txt=el.get_text(" ",strip=True)
+            if len(txt)<15: continue
+            if len(txt)<120:
+                d=extract_dates(txt)
+                if d: cur=d[0]; continue
+            if len(txt)<30 or len(txt)>4000: continue
+            # فلتر القطاع فقط
+            if not any(k.lower() in txt.lower() for k in KEYWORDS): continue
+            if "طلب العروض" not in txt and "استشارة" not in txt and "consultation" not in txt.lower() and "appel" not in txt.lower():
+                continue
+            if txt[:100] in seen: continue
+            seen.add(txt[:100])
+            if not cur: cur=latest
+            link=url
+            for a in el.find_all('a', href=True):
+                if ".pdf" in a['href'].lower() or "download" in a['href'].lower():
+                    link=urljoin(url, a['href'])
+                    break
+            all_tenders.append({"id":gen_id(txt,url),"title":txt,"anep":gen_anep(txt),"link":link,"date":f"{cur[2]:02d}/{cur[1]:02d}/{cur[0]}","source":url})
+    print(f"📦 إجمالي قطاع مكاتب/خزانات: {len(all_tenders)}")
+    return all_tenders
 
-if not new_tenders:
-    print("✅ لا يوجد مناقصات جديدة من 2026 اليوم - البوت يعمل ويفحص كل 30 دقيقة")
-else:
-    for t in new_tenders[:5]:
-        prio_short = t["prio"].split("-")[1]
-        matched_factories = find_factories_for_tender(factories, prio_short, t["wilaya"], limit=3)
-        factories_text = ""
-        for i, f in enumerate(matched_factories, 1):
-            factories_text += f"{i}. 🏭 <b>{f['name']}</b>\n   📦 {f['product']} | 📞 {f['phone']}\n   📍 <a href=\"{f['map']}\">موقعه على الخريطة</a> | {'✅ مصنع مباشر' if f.get('is_direct_factory') else ''}\n"
-        if not factories_text:
-            factories_text = f"🏭 لم يتم العثور على مصنع في {t['wilaya']} - سيتم البحث العام\n"
-        map_wilaya = f"https://www.google.com/maps/search/?api=1&query=Direction+{t['company']}+Wilaya+{t['wilaya']}"
-        factory_search_map = f"https://www.google.com/maps/search/?api=1&query=Usine+{prio_short}+{t['wilaya']}+Algérie"
-        msg = f"""🔔 <b>مناقصة حقيقية 2026 - {t['prio']}</b> 🔔
+factories=load_factories()
+sent=load_sent()
+print(f"🔒 مرسلة سابقا: {len(sent)}")
 
-🏢 <b>الشركة:</b> {t['company']} ({t['sector']})
-📍 <b>الولاية:</b> {t['wilaya']} | ANEP: {t['anep']}
-📋 <b>الموضوع:</b> {t['title']}
+tenders=scrape()
+new=[t for t in tenders if t["id"] not in sent][:10]
+print(f"🔍 جديدة: {len(new)}")
 
-📄 <a href="{t['link']}">فتح الإعلان الأصلي BOMOP 2026</a>
-🗺️ <a href="{map_wilaya}">موقع الشركة على Google Maps</a>
-🔍 <a href="{factory_search_map}">مصانع {prio_short} في {t['wilaya']} على Maps</a>
-
-🏭 <b>أقرب 3 مصانع جزائرية مباشرة:</b>
-{factories_text}
-#2026 #EPIC_EPE #BOMOP
-"""
-        send(msg)
-        sent.add(t["id"])
+if not os.path.exists(SENT_FILE):
     save_sent(sent)
-    print(f"✅ أرسلت {len(new_tenders[:5])} مناقصات 2026 حقيقية")
+
+for t in new:
+    nearest=choose_nearest(t['title'], factories, 3)
+    loc=extract_location(t['title'])
+    fac_txt=""
+    for i,f in enumerate(nearest,1):
+        name=html.escape(f.get('name','')[:45])
+        phone_raw=str(f.get('phone','')).strip()
+        phone=f"\u200E{phone_raw}\u200E"
+        murl=f.get('map') or f.get('maps') or f"https://www.google.com/maps/search/{name}+{loc}"
+        fac_txt+=f"{i}. 🏭 <b>{name}</b> ({loc}) 📞 <code>{phone}</code> | <a href='{murl}'>🗺️ خريطة</a>\n"
+    msg=f"""🔔 <b>[{t['date']}] {loc} - قطاع مكاتب/خزانات</b>\n\nANEP: {t['anep']}\n📋 {html.escape(t['title'][:700])}\n\n📄 <a href="{t['link']}">📎 الإعلان الأصلي + PDF</a>\n🔗 المصدر: {t['source']}\n\n🏭 <b>أقرب 3 موردين:</b>\n{fac_txt}"""
+    if send(msg):
+        sent.add(t["id"])
+
+save_sent(sent)
+print(f"🏁 محفوظ {len(sent)}")
