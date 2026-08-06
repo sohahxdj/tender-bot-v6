@@ -1,37 +1,25 @@
-name: Tender Bot - 2026 Strict
-
+name: Office Sector Bot
 on:
   schedule:
-    - cron: '*/30 * * * *'  # كل 30 دقيقة
+    - cron: '0 7 * * *'
   workflow_dispatch:
-
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-          
-      - name: Run bot - 2026 only
-        env:
+      - run: pip install requests beautifulsoup4 lxml urllib3
+      - env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python bot.py
-          
-      - name: Save sent history
-        run: |
-          git config user.name "tender-bot"
-          git config user.email "bot@github.com"
-          git add sent.json || echo "no sent.json"
-          git diff --quiet && git diff --staged --quiet || git commit -m "update sent 2026"
-          git push || echo "nothing to push"
-          
+        run: python bot_office.py
+      - run: |
+          git config --global user.name "Office Bot"
+          git config --global user.email "office@tradium.dz"
+          if [! -f sent_office.json ]; then echo '{"ids":[],"count":0}' > sent_office.json; fi
+          git add sent_office.json -f
+          git diff --staged --quiet || git commit -m "office $(date)"
+          git push || echo "ok"          
